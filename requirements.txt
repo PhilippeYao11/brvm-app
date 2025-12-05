@@ -1,0 +1,8 @@
+streamlit
+pandas
+numpy
+altair
+scipy
+statsmodels
+scikit-learn
+requests

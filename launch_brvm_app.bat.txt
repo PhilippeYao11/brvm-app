@@ -1,0 +1,4 @@
+@echo off
+cd /d "C:\Users\olivi\Downloads\Investing\BRVM\BRVM_PROJECT"
+"C:\Users\olivi\anaconda3\python.exe" -m streamlit run app.py
+pause
