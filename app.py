@@ -464,26 +464,32 @@ def main():
         )
 
         # Portfolio value: historical + projected mean
+        # --- Portfolio value: historical + projected mean ---
+        # Historical part
         hist_df = pd.DataFrame(
             {
-                "Date": prices_uni.index,
+                "Date": equity_curve.index,                         # same length as values
                 "Value": equity_curve.values,
-                "Type": "Historical",
+                "Type": ["Historical"] * len(equity_curve),         # list with same length
             }
+        )
+
+        # Future dates for the projected path
+        future_dates = pd.bdate_range(
+            start=equity_curve.index[-1], 
+            periods=len(sim["mean_portfolio_path"])
         )
 
         fut_df = pd.DataFrame(
             {
-                "Day": np.arange(horizon_days + 1),
+                "Date": future_dates,
                 "Value": sim["mean_portfolio_path"].values,
+                "Type": ["Projected mean"] * len(sim["mean_portfolio_path"]),
             }
         )
-        # align projection on last historical date
-        fut_df["Date"] = hist_df["Date"].iloc[-1] + pd.to_timedelta(fut_df["Day"], unit="D")
-        fut_df["Type"] = "Projected mean"
-        fut_df = fut_df[["Date", "Value", "Type"]]
 
         chart_df = pd.concat([hist_df, fut_df], ignore_index=True)
+
 
         chart_port = (
             alt.Chart(chart_df)
