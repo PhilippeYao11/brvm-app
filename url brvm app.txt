@@ -1,0 +1,9 @@
+https://brvm-app-philippeyao11.streamlit.app
+
+
+Quand je modifie le code en local pour relancer automatiquement l'app git :
+
+cd "/c/Users/olivi/Downloads/Investing/BRVM/BRVM_PROJECT"
+git add .
+git commit -m "Update models / UI"
+git push
