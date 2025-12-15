@@ -9,13 +9,10 @@ from config import ANNUAL_FACTOR
 # =========================
 #  URLs CSV Sika par symbole
 # =========================
-# À REMPLIR TOI-MÊME avec les vraies URLs de téléchargement CSV
-# que tu as copiées via l'onglet Réseau du navigateur.
-#
-# Exemple fictif (à adapter avec les vraies URLs) :
+# Exemple:
 # SIKA_URL_MAP = {
-#     "SNTS": "https://www.sikafinance.com/marches/telecharger?symbole=SNTS&format=csv",
-#     "SGBC": "https://www.sikafinance.com/marches/telecharger?symbole=SGBC&format=csv",
+#     "SNTS": "https://www.sikafinance.com/...csv...",
+#     "SGBC": "https://www.sikafinance.com/...csv...",
 # }
 SIKA_URL_MAP: dict[str, str] = {}
 
@@ -39,7 +36,7 @@ def standardize_sika_df(df: pd.DataFrame) -> pd.DataFrame:
         "volume": "volume",
     }
 
-    # On garde uniquement les colonnes attendues et on renomme
+    # Strict: keep only expected columns
     df = df[list(cols_map.keys())].rename(columns=cols_map)
 
     # Symbol: keep everything before the dot (SNTS.sn -> SNTS)
@@ -48,15 +45,15 @@ def standardize_sika_df(df: pd.DataFrame) -> pd.DataFrame:
     # Day-first date format on SIKA
     df["date"] = pd.to_datetime(df["date"], dayfirst=True, errors="coerce")
 
-    # Forcer les colonnes numériques en float
+    # Convert numeric cols
     num_cols = ["open", "high", "low", "close", "volume"]
     for col in num_cols:
         df[col] = (
             df[col]
             .astype(str)
-            .str.replace("\u00a0", "", regex=False)  # espace insécable éventuel
-            .str.replace(" ", "", regex=False)      # espaces classiques
-            .str.replace(",", ".", regex=False)     # virgules -> points
+            .str.replace("\u00a0", "", regex=False)
+            .str.replace(" ", "", regex=False)
+            .str.replace(",", ".", regex=False)
         )
         df[col] = pd.to_numeric(df[col], errors="coerce")
 
@@ -91,19 +88,21 @@ def _build_wide_tables(all_rows: list[pd.DataFrame]):
     return data_long, prices_wide, volumes_wide
 
 
-def fetch_sika_history_for_symbol(symbol: str) -> pd.DataFrame:
+def fetch_sika_history_for_symbol(symbol: str, url_map: dict[str, str] | None = None) -> pd.DataFrame:
     """
     Télécharge l'historique complet d'un symbole sur Sika Finance
-    en utilisant l'URL explicite définie dans SIKA_URL_MAP.
+    en utilisant l'URL explicite définie dans url_map (ou SIKA_URL_MAP).
 
-    Si le symbole n'est pas dans SIKA_URL_MAP, on renvoie un DataFrame vide.
+    Si le symbole n'est pas dans la map, on renvoie un DataFrame vide.
     """
-    url = SIKA_URL_MAP.get(symbol)
+    if url_map is None:
+        url_map = SIKA_URL_MAP
+
+    url = url_map.get(symbol)
     if not url:
-        # Pas d'URL définie pour ce symbole -> pas de mise à jour en ligne
         return pd.DataFrame(columns=["symbol", "date", "open", "high", "low", "close", "volume"])
 
-    resp = requests.get(url, timeout=15)
+    resp = requests.get(url, timeout=20)
     resp.raise_for_status()
 
     raw_csv = io.StringIO(resp.text)
@@ -112,14 +111,15 @@ def fetch_sika_history_for_symbol(symbol: str) -> pd.DataFrame:
     return tmp
 
 
-def update_history_from_sika_online(data_long: pd.DataFrame) -> pd.DataFrame:
+def update_history_from_sika_online(data_long: pd.DataFrame, url_map: dict[str, str] | None = None) -> pd.DataFrame:
     """
     Pour chaque symbole présent dans data_long:
-      - on télécharge l'historique Sika via fetch_sika_history_for_symbol(),
+      - on télécharge l'historique Sika via fetch_sika_history_for_symbol()
       - on ajoute uniquement les lignes dont la date est > dernière date locale.
-
-    Retourne un nouveau data_long mis à jour.
     """
+    if url_map is None:
+        url_map = SIKA_URL_MAP
+
     if data_long.empty:
         return data_long
 
@@ -131,9 +131,8 @@ def update_history_from_sika_online(data_long: pd.DataFrame) -> pd.DataFrame:
             continue
 
         try:
-            remote_hist = fetch_sika_history_for_symbol(sym)
+            remote_hist = fetch_sika_history_for_symbol(sym, url_map=url_map)
         except Exception:
-            # Si la requête échoue pour un symbole, on le skippe
             continue
 
         if remote_hist.empty:
@@ -146,7 +145,6 @@ def update_history_from_sika_online(data_long: pd.DataFrame) -> pd.DataFrame:
             new_parts.append(df_new)
 
     if not new_parts:
-        # rien de nouveau
         return data_long
 
     updated = pd.concat([data_long] + new_parts, ignore_index=True)
@@ -155,22 +153,13 @@ def update_history_from_sika_online(data_long: pd.DataFrame) -> pd.DataFrame:
         .drop_duplicates(subset=["symbol", "date"])
         .sort_values(["symbol", "date"])
     )
-
     return updated
 
 
-def build_prices_from_sika_folder(raw_dir: Path, update_online: bool = False):
+def build_prices_from_sika_folder(raw_dir: Path, update_online: bool = False, url_map: dict[str, str] | None = None):
     """
     Read all *.csv files from raw_dir and build wide price/volume tables.
-
-    Si update_online=True :
-      - on va chercher sur Sika, pour chaque symbole, l'historique complet CSV
-        via les URLs définies dans SIKA_URL_MAP,
-      - on ajoute uniquement les nouvelles dates,
-      - puis on reconstruit prices_wide et volumes_wide.
-
-    Les fichiers locaux dans raw_dir restent la base, mais la session Streamlit
-    voit en plus les dernières cotations récupérées en ligne.
+    If update_online=True, tries to update latest quotes from Sika using url_map / SIKA_URL_MAP.
     """
     csv_files = list(raw_dir.glob("*.csv"))
     if not csv_files:
@@ -182,18 +171,15 @@ def build_prices_from_sika_folder(raw_dir: Path, update_online: bool = False):
         tmp = standardize_sika_df(tmp)
         all_rows.append(tmp)
 
-    # historique local à partir des CSV
     data_long = (
         pd.concat(all_rows, ignore_index=True)
         .drop_duplicates(subset=["symbol", "date"])
         .sort_values(["symbol", "date"])
     )
 
-    # Option : mise à jour en ligne à partir de Sika
     if update_online:
-        data_long = update_history_from_sika_online(data_long)
+        data_long = update_history_from_sika_online(data_long, url_map=url_map)
 
-    # Rebuild wide tables à partir du data_long final
     prices_wide = (
         data_long
         .pivot(index="date", columns="symbol", values="close")
@@ -225,6 +211,29 @@ def build_prices_from_uploaded(uploaded_files):
     return _build_wide_tables(all_rows)
 
 
+def build_prices_from_sika_online_urls(url_map: dict[str, str]):
+    """
+    Charge directement depuis Sika Finance (URLs CSV explicites).
+    url_map = {"SNTS": "https://....", "SGBC": "..."}
+    """
+    if not url_map:
+        raise ValueError("url_map is empty. Provide at least one SYMBOL->URL mapping.")
+
+    all_rows: list[pd.DataFrame] = []
+    for sym in url_map.keys():
+        try:
+            df = fetch_sika_history_for_symbol(sym, url_map=url_map)
+            if not df.empty:
+                all_rows.append(df)
+        except Exception:
+            continue
+
+    if not all_rows:
+        raise ValueError("No data fetched from Sika (check URLs / symbols).")
+
+    return _build_wide_tables(all_rows)
+
+
 def slice_history(
     prices_wide: pd.DataFrame,
     volumes_wide: pd.DataFrame,
@@ -237,6 +246,9 @@ def slice_history(
       - "12 derniers mois"
       - "24 derniers mois"
     """
+    if prices_wide is None or prices_wide.empty:
+        return prices_wide, volumes_wide
+
     if lookback_choice == "Tout":
         return prices_wide, volumes_wide
 
@@ -257,7 +269,7 @@ def slice_history(
 def compute_returns(prices_wide: pd.DataFrame) -> pd.DataFrame:
     """
     Simple daily returns: P_t / P_{t-1} - 1.
-    S'assure que toutes les colonnes sont bien numériques.
+    Ensures numeric columns.
     """
     prices_num = prices_wide.apply(pd.to_numeric, errors="coerce")
     prices_num = prices_num.replace([np.inf, -np.inf], np.nan)
